@@ -1,0 +1,9 @@
+streamlit
+streamlit-autorefresh
+gspread
+gspread-dataframe
+google-auth-oauthlib
+google-auth-httplib2
+unidecode
+kaggle
+pandas

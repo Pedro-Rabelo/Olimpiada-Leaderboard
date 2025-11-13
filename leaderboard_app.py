@@ -16,34 +16,47 @@ import json
 import zoneinfo
 
 # --- Configurações ---
+# (Mantidos os nomes dos arquivos locais para o app funcionar localmente)
 NOME_DO_ARQUIVO_JSON = "olimpiada-465219-c97ced7e5506.json"
 KAGGLE_JSON_PATH = "kaggle.json"
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+SCOPES = ['https.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 NOME_DA_PLANILHA_SAIDA = "[NAO_EDITE]_leaderboard_geral_kaggle"
 NOME_PLANILHA_INSCRICOES = "equipes_aprovadas"
 NOME_ABA_INSCRICOES = "equipes_confirmadas"
-competitions = ["aprendizado-de-maquina-1-fase", "visao-computacional-1-fase", "linguagem-natural-1-fase"]
+# ALTERAR DE ACORDO COM OS SLUGS DOS NOVOS DESAFIOS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+competitions = ["aprendizado-de-maquina-2-fase", "visao-computacional-2-fase", "linguagem-natural-2-fase"]
 BR_TZ = zoneinfo.ZoneInfo("America/Sao_Paulo")
 
-# --- Lógica de Autenticação Inicial (Kaggle) ---
+# --- LÓGICA DE AUTENTICAÇÃO INICIAL (KAGGLE) - MODIFICADA PARA DEPLOY ---
 try:
-    if not os.path.exists(KAGGLE_JSON_PATH):
-        st.error(f"Arquivo 'kaggle.json' não encontrado. Coloque-o na mesma pasta do script.")
-        st.stop()
-    if not os.path.exists(NOME_DO_ARQUIVO_JSON):
-        st.error(f"Arquivo '{NOME_DO_ARQUIVO_JSON}' não encontrado. Coloque-o na mesma pasta do script.")
-        st.stop()
+    # Cria a pasta .kaggle se não existir (necessário no Streamlit Cloud)
+    kaggle_dir = os.path.expanduser("~/.kaggle")
+    os.makedirs(kaggle_dir, exist_ok=True)
+    
+    # Define o caminho do arquivo kaggle.json
+    kaggle_json_path = os.path.join(kaggle_dir, "kaggle.json")
 
-    with open(KAGGLE_JSON_PATH, 'r') as f:
-        kaggle_credentials = json.load(f)
-
-    os.environ['KAGGLE_USERNAME'] = kaggle_credentials['username']
-    os.environ['KAGGLE_KEY'] = kaggle_credentials['key']
-
+    # Verifica se o app está rodando localmente (e tem o arquivo) ou na nuvem
+    if os.path.exists(KAGGLE_JSON_PATH):
+        # Se estiver rodando local, apenas copia o arquivo local
+        shutil.copy(KAGGLE_JSON_PATH, kaggle_json_path)
+    else:
+        # Se estiver na nuvem, pega de st.secrets e escreve o arquivo
+        kaggle_credentials = {
+            "username": st.secrets["kaggle"]["username"],
+            "key": st.secrets["kaggle"]["key"]
+        }
+        with open(kaggle_json_path, "w") as f:
+            json.dump(kaggle_credentials, f)
+    
+    # Define as permissões corretas para o arquivo
+    os.chmod(kaggle_json_path, 0o600)
+    
     from kaggle import api
 except Exception as e:
-    st.error(f"Falha na configuração do Kaggle: {e}")
+    st.error(f"Falha na configuração do Kaggle: {e}. Você configurou os segredos 'kaggle' no Streamlit Cloud?")
     st.stop()
+# --- FIM DA MODIFICAÇÃO ---
 
 
 # --- Funções Auxiliares ---
@@ -132,14 +145,23 @@ def buscar_e_processar_dados():
     try:
         log_mensagens_internas.append("[INFO] Iniciando busca e processamento de dados...")
 
-        # --- Autenticação Google ---
+        # --- AUTENTICAÇÃO GOOGLE - MODIFICADA PARA DEPLOY ---
         try:
-            creds = Credentials.from_service_account_file(NOME_DO_ARQUIVO_JSON, scopes=SCOPES)
+            # Verifica se está rodando local (e tem o arquivo) ou na nuvem
+            if os.path.exists(NOME_DO_ARQUIVO_JSON):
+                # Se local, usa o arquivo
+                creds = Credentials.from_service_account_file(NOME_DO_ARQUIVO_JSON, scopes=SCOPES)
+            else:
+                # Se na nuvem, usa o st.secrets
+                google_creds_dict = dict(st.secrets["google_service_account"])
+                creds = Credentials.from_service_account_info(google_creds_dict, scopes=SCOPES)
+            
             gc = gspread.authorize(creds)
             log_mensagens_internas.append("[INFO] Autenticação Google OK.")
         except Exception as e:
-            log_mensagens_internas.append(f"[FALHA] Auth Google: {e}")
+            log_mensagens_internas.append(f"[FALHA] Auth Google: {e}. Verifique os segredos 'google_service_account'.")
             raise
+        # --- FIM DA MODIFICAÇÃO ---
 
         # 1. Busca e unifica os leaderboards do Kaggle
         all_dfs = [get_leaderboard_df(comp) for comp in competitions]
@@ -204,13 +226,16 @@ def buscar_e_processar_dados():
         df_privada["Rank"] = df_privada.index + 1
         log_mensagens_internas.append("[INFO] Rankings gerados.")
 
+
+# ALTERAR AQUI O NOME DOS DESAFIOS CONFORME NECESSÁRIO!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
         # 8. Prepara DFs Finais
         colunas_finais = {
             'Rank': 'Rank', 'TeamName': 'Nome da Equipe', 'TotalScore': 'Pontuação Total',
-            'aprendizado-de-maquina-1-fase': 'Score AM',
-            'visao-computacional-1-fase': 'Score VC',
-            'linguagem-natural-1-fase': 'Score PLN',
-            'TeamMemberUserNames': 'Membros' # Mantemos a coluna, mas não exibimos
+            'aprendizado-de-maquina-2-fase': 'Score AM',
+            'visao-computacional-2-fase': 'Score VC',
+            'linguagem-natural-2-fase': 'Score PLN',
+            'TeamMemberUserNames': 'Membros' #N é utilizada no display, mas mantida para possível uso futuro
         }
         colunas_para_mostrar = list(colunas_finais.keys())
         df_publica_final = df_publica[[col for col in colunas_para_mostrar if col in df_publica.columns]].copy()
@@ -249,6 +274,7 @@ def buscar_e_processar_dados():
     return df_publica_final, df_privada_final, status_final_interno, datetime.now(BR_TZ)
 
 # --- FRONTEND (HTML/CSS/JS FINAL) ---
+# (Esta parte do código permanece exatamente a mesma da sua versão)
 
 st.set_page_config(page_title="Leaderboard Olimpíada IA 2025", layout="wide", initial_sidebar_state="collapsed")
 st_autorefresh(interval=300000, key="datarefresh") # 5 minutos
@@ -291,42 +317,24 @@ CSS_STRING = """
         width: 100%; max-width: 600px; overflow: hidden; flex-grow: 1; border: 4px solid var(--cor-fonte); }
     .leaderboard-card h2 { font-family: var(--fonte-pixel); font-size: 1.1rem; background-color: var(--cor-card-titulo);
         padding: 20px; margin: 0; text-align: center; color: var(--cor-fonte); text-shadow: none; }
-
-
     .equipe-item { display: flex; align-items: center; justify-content: space-between; padding: 15px 10px; margin-bottom: 10px;
         border-radius: 8px; background: var(--cor-card); border-left: 7px solid var(--cor-fonte); animation: fadeIn 0.5s ease forwards;
         opacity: 0; border: 2px solid var(--cor-fonte); }
     @keyframes fadeIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
-
     .equipe-item.rank-1 .rank { color: var(--cor-ouro); }
     .equipe-item.rank-2 .rank { color: var(--cor-prata); }
     .equipe-item.rank-3 .rank { color: var(--cor-bronze); }
     .equipe-item .rank { font-family: var(--fonte-pixel); font-size: 1.3rem; min-width: 45px; text-align: center; color: var(--cor-fonte); }
-
     .equipe-info { flex-grow: 1; margin-left: 15px; overflow: hidden; }
-    .equipe-info .nome {
-        font-family: var(--fonte-pixel); /* APLICADO FONTE PIXEL */
-        font-size: 1.0rem; /* Ajustado tamanho */
-        font-weight: normal; /* Normal, pois a fonte já é bold */
-        color: var(--cor-fonte);
-    }
-
-    .equipe-score {
-        font-family: var(--fonte-pixel); /* APLICADO FONTE PIXEL */
-        font-size: 1.2rem;
-        color: var(--cor-destaque);
-        text-align: right;
-        padding-left: 10px;
-    }
+    .equipe-info .nome { font-family: var(--fonte-pixel); font-size: 1.0rem; font-weight: normal; color: var(--cor-fonte); }
+    .equipe-score { font-family: var(--fonte-pixel); font-size: 1.2rem; color: var(--cor-destaque); text-align: right; padding-left: 10px; }
     .loading { text-align: center; font-size: 1.2rem; padding: 20px; color: var(--cor-fonte); }
-
     #fullscreen-btn-container { position: absolute; top: 15px; right: 20px; z-index: 100; }
     #fullscreen-btn { background: rgba(0, 0, 204, 0.1); border: 1px solid var(--cor-fonte); color: var(--cor-fonte); padding: 8px 12px;
         border-radius: 5px; cursor: pointer; font-size: 1.1rem; transition: all 0.2s ease; }
     #fullscreen-btn:hover { background: var(--cor-fonte); color: var(--cor-fundo-geral-leaderboard); box-shadow: 0 0 10px var(--cor-fonte); }
     .colab-leaderboard-container.fake-fullscreen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 9999;
         overflow-y: auto; margin: 0; border-radius: 0; }
-
     .colab-leaderboard-container.fake-fullscreen h1 { font-size: 2.5rem; }
 </style>
 """
