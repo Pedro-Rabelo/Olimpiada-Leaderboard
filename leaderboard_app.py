@@ -23,7 +23,6 @@ SCOPES = ['https.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/
 NOME_DA_PLANILHA_SAIDA = "[NAO_EDITE]_leaderboard_geral_kaggle"
 NOME_PLANILHA_INSCRICOES = "equipes_aprovadas"
 NOME_ABA_INSCRICOES = "equipes_confirmadas"
-# ALTERAR DE ACORDO COM OS SLUGS DOS NOVOS DESAFIOS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 competitions = ["aprendizado-de-maquina-2-fase", "visao-computacional-2-fase", "linguagem-natural-2-fase"]
 BR_TZ = zoneinfo.ZoneInfo("America/Sao_Paulo")
 
@@ -226,8 +225,6 @@ def buscar_e_processar_dados():
         df_privada["Rank"] = df_privada.index + 1
         log_mensagens_internas.append("[INFO] Rankings gerados.")
 
-
-# ALTERAR AQUI O NOME DOS DESAFIOS CONFORME NECESSÁRIO!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
         # 8. Prepara DFs Finais
         colunas_finais = {
