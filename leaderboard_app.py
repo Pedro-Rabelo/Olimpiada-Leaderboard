@@ -1,6 +1,5 @@
-# LEADERBOARD V2: LISTA MANUAL DE EQUIPES + KAGGLE (SEM GOOGLE SHEETS)
-# Visual: Branco/Azul/Laranja (Pixel Font)
-# Para rodar: streamlit run leaderboard_app.py
+# LEADERBOARD OLIMPÍADA IA 2025 - VERSÃO DEPLOY (SEM GOOGLE SHEETS)
+# Para rodar localmente: streamlit run leaderboard_app.py
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -15,13 +14,10 @@ from datetime import datetime
 import zoneinfo
 
 # --- CONFIGURAÇÕES ---
-KAGGLE_JSON_PATH = "kaggle.json"
-
-# LISTA DE COMPETIÇÕES (Fase 2)
+# Definição das Competições (Fase 2)
 competitions = ["aprendizado-de-maquina-2-fase", "visao-computacional-2-fase", "linguagem-natural-2-fase"]
 
 # LISTA MANUAL DE EQUIPES E CATEGORIAS
-# O script vai usar isso para filtrar e categorizar os dados vindos do Kaggle
 TEAMS_INFO = {
     # Escolas Públicas
     'Cristal Neural': 'publica',
@@ -62,28 +58,28 @@ BR_TZ = zoneinfo.ZoneInfo("America/Sao_Paulo")
 
 # --- FUNÇÕES AUXILIARES ---
 def normalize_text(text):
-    """Remove acentos e coloca em minúsculas para comparação segura"""
     text = str(text).lower().strip()
     text = unidecode.unidecode(text)
     return text
 
-# Pré-processa a lista de equipes para normalizar as chaves
-# Cria um dicionário reverso: { 'cristal neural': {'OriginalName': 'Cristal Neural', 'Type': 'publica'} }
+# Normaliza a lista de referência para buscas rápidas
 NORMALIZED_TEAMS = {}
 for name, category in TEAMS_INFO.items():
     norm_name = normalize_text(name)
     NORMALIZED_TEAMS[norm_name] = {'OriginalName': name, 'Type': category}
 
-# --- AUTENTICAÇÃO KAGGLE ---
+# --- AUTENTICAÇÃO KAGGLE (Mecanismo de Deploy) ---
 try:
+    # Cria diretório .kaggle na home do servidor
     kaggle_dir = os.path.expanduser("~/.kaggle")
     os.makedirs(kaggle_dir, exist_ok=True)
     kaggle_dest_path = os.path.join(kaggle_dir, "kaggle.json")
 
-    # Prioridade: Arquivo local -> Segredos do Streamlit
-    if os.path.exists(KAGGLE_JSON_PATH):
-        shutil.copy(KAGGLE_JSON_PATH, kaggle_dest_path)
+    # Verifica se estamos rodando local (arquivo existe) ou na nuvem (usa secrets)
+    if os.path.exists("kaggle.json"):
+        shutil.copy("kaggle.json", kaggle_dest_path)
     else:
+        # Pega as credenciais dos Segredos do Streamlit Cloud
         try:
             kaggle_credentials = {
                 "username": st.secrets["kaggle"]["username"],
@@ -91,107 +87,81 @@ try:
             }
             with open(kaggle_dest_path, "w") as f:
                 json.dump(kaggle_credentials, f)
-        except: pass # Segue tentando importar, vai dar erro lá na frente se falhar
+        except Exception as e:
+            # Se falhar aqui, vai dar erro no import abaixo e mostrar mensagem amigável
+            pass
     
+    # Define permissões de segurança exigidas pelo Kaggle (Linux/Cloud)
     if os.path.exists(kaggle_dest_path):
         os.chmod(kaggle_dest_path, 0o600)
     
     from kaggle import api
-    api.authenticate() # Força autenticação para testar
+    api.authenticate() 
 
 except Exception as e:
-    st.error(f"Erro na configuração do Kaggle: {e}")
+    st.error(f"Erro de Autenticação Kaggle: {e}. Verifique se o arquivo 'kaggle.json' existe localmente ou se os Segredos foram configurados no Streamlit Cloud.")
     st.stop()
 
-# --- FUNÇÃO DE COLETA DE DADOS (Igual ao seu script de teste) ---
-@st.cache_data(ttl=60) # Cache de 1 minuto para não bloquear o Kaggle
+# --- FUNÇÃO DE COLETA DE DADOS (COM CACHE) ---
+@st.cache_data(ttl=60) # Cache de 60 segundos
 def get_kaggle_data(competitions_list):
-    """
-    Baixa os dados de todas as competições listadas e retorna um DataFrame unificado.
-    """
     all_dfs = []
-    
     for comp in competitions_list:
         zip_path = f"{comp}.zip"
         try:
-            # 1. Baixa o ZIP
             api.competition_leaderboard_download(comp, path=".")
-            
-            # 2. Abre o ZIP e lê o CSV
             if os.path.exists(zip_path):
                 with zipfile.ZipFile(zip_path, 'r') as z:
-                    # Pega o primeiro arquivo que termina com .csv
                     csv_name = [n for n in z.namelist() if n.endswith('.csv')][0]
-                    
                     with z.open(csv_name) as f:
                         df = pd.read_csv(f)
-                        df['competition'] = comp # Marca de qual competição veio
-                        # Normaliza o nome da equipe no Kaggle para bater com nossa lista
+                        df['competition'] = comp
                         df['TeamName_Norm'] = df['TeamName'].apply(normalize_text)
                         all_dfs.append(df)
-                
-                # Limpeza
                 os.remove(zip_path)
-                
         except Exception as e:
-            print(f"[AVISO] Erro ao processar {comp}: {e}")
-            if os.path.exists(zip_path):
+            print(f"Erro ao baixar {comp}: {e}")
+            if os.path.exists(zip_path): 
                 try: os.remove(zip_path)
                 except: pass
     
-    if not all_dfs:
-        return pd.DataFrame()
-        
+    if not all_dfs: return pd.DataFrame()
     return pd.concat(all_dfs, ignore_index=True)
 
-# --- PROCESSAMENTO PRINCIPAL ---
+# --- PROCESSAMENTO ---
 def processar_rankings():
     status = "[SUCESSO]"
     timestamp = datetime.now(BR_TZ)
     
-    # 1. Busca dados brutos do Kaggle
     df_kaggle = get_kaggle_data(competitions)
     
-    # Se não veio nada do Kaggle, retorna vazio mas não quebra
     if df_kaggle.empty:
         return pd.DataFrame(), pd.DataFrame(), "[AVISO]", timestamp
 
     try:
-        # 2. Pivotar os dados (transformar linhas de competição em colunas de score)
-        # Mantemos o max score caso a equipe tenha submetido mais de uma vez (improvável no leaderboard público, mas seguro)
-        df_pivot = df_kaggle.pivot_table(
-            index='TeamName_Norm', 
-            columns='competition', 
-            values='Score', 
-            aggfunc='max'
-        ).reset_index()
+        # Pivotar: Transformar competições em colunas
+        df_pivot = df_kaggle.pivot_table(index='TeamName_Norm', columns='competition', values='Score', aggfunc='max').reset_index()
 
-        # 3. Preencher com 0 onde não tem nota
+        # Preencher zeros
         for comp in competitions:
-            if comp not in df_pivot.columns:
-                df_pivot[comp] = 0
+            if comp not in df_pivot.columns: df_pivot[comp] = 0
         df_pivot.fillna(0, inplace=True)
 
-        # 4. Calcular Total Score
+        # Somar Total
         score_cols = [c for c in competitions if c in df_pivot.columns]
         df_pivot['TotalScore'] = df_pivot[score_cols].sum(axis=1)
 
-        # 5. Cruzar com a nossa lista manual (TEAMS_INFO)
-        # Vamos adicionar as colunas 'OriginalName' e 'Type' baseadas no dicionário NORMALIZED_TEAMS
-        
+        # Cruzar com Lista Manual
         def get_meta_info(norm_name, field):
-            if norm_name in NORMALIZED_TEAMS:
-                return NORMALIZED_TEAMS[norm_name][field]
-            return None
+            return NORMALIZED_TEAMS[norm_name][field] if norm_name in NORMALIZED_TEAMS else None
 
         df_pivot['Nome da Equipe'] = df_pivot['TeamName_Norm'].apply(lambda x: get_meta_info(x, 'OriginalName'))
         df_pivot['Categoria'] = df_pivot['TeamName_Norm'].apply(lambda x: get_meta_info(x, 'Type'))
 
-        # 6. Filtrar apenas as equipes que estão na nossa lista
-        # (Removemos quem está no Kaggle mas não está na lista aprovada)
+        # Filtrar apenas aprovadas
         df_final = df_pivot.dropna(subset=['Nome da Equipe']).copy()
 
-        # 7. Separar Públicas e Privadas e Ordenar
+        # Separar e Ordenar
         df_publica = df_final[df_final['Categoria'] == 'publica'].sort_values('TotalScore', ascending=False).reset_index(drop=True)
         df_publica['Rank'] = df_publica.index + 1
 
@@ -201,157 +171,61 @@ def processar_rankings():
         return df_publica, df_privada, status, timestamp
 
     except Exception as e:
-        print(f"Erro no processamento: {e}")
+        print(f"Erro processamento: {e}")
         return pd.DataFrame(), pd.DataFrame(), "[FALHA]", timestamp
 
 # --- FRONTEND ---
 st.set_page_config(page_title="Olimpíada IA 2025", layout="wide", initial_sidebar_state="collapsed")
 st_autorefresh(interval=300000, key="datarefresh")
 
-with st.spinner("Atualizando dados do Kaggle..."):
+with st.spinner("Atualizando..."):
     df_pub, df_priv, status, date = processar_rankings()
 
-# Converte para JSON para o HTML ler
 json_pub = df_pub.to_json(orient='records', force_ascii=False)
 json_priv = df_priv.to_json(orient='records', force_ascii=False)
 
-# Define textos de status
 if status == "[FALHA]": st_cls, st_txt = "FAILURE", "FALHA TÉCNICA"
 elif status == "[AVISO]": st_cls, st_txt = "WARNING", "AGUARDANDO DADOS"
 else: st_cls, st_txt = "SUCCESS", "ATUALIZADO COM SUCESSO"
 
-# --- SEU CSS VISUAL (MANTIDO INTACTO) ---
+# CSS E JS (VISUAL MANTIDO)
 CSS = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto:wght@400;700&display=swap');
     @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css');
-
     :root {
-        --bg-main: #FFFFFF;
-        --bg-container: #F0F4FF;
-        --card-bg: #FFFFFF;
-        --card-title-bg: rgba(0, 0, 204, 0.05);
-        --text-blue: #0000CC;
-        --status-orange: #E65100;
-        --status-text: #FFFFFF;
-        --highlight-pink: #E6007A;
+        --bg-main: #FFFFFF; --bg-container: #F0F4FF; --card-bg: #FFFFFF; --card-title-bg: rgba(0, 0, 204, 0.05);
+        --text-blue: #0000CC; --status-orange: #E65100; --status-text: #FFFFFF; --highlight-pink: #E6007A;
         --gold: #FFD700; --silver: #C0C0C0; --bronze: #CD7F32;
-        --font-pixel: 'Press Start 2P', cursive;
+        --font-pixel: 'Press Start 2P', cursive; --font-corpo: 'Roboto', sans-serif;
     }
-
     body { background-color: var(--bg-main) !important; margin: 0; padding: 0; }
-    
-    .colab-leaderboard-container {
-        font-family: 'Roboto', sans-serif;
-        background-color: var(--bg-main);
-        color: var(--text-blue);
-        margin: 0; padding: 20px;
-        border-radius: 12px;
-        position: relative;
-    }
-
+    .colab-leaderboard-container { font-family: 'Roboto', sans-serif; background-color: var(--bg-main); color: var(--text-blue); margin: 0; padding: 20px; border-radius: 12px; position: relative; }
     header { text-align: center; margin-bottom: 30px; }
-    header h1 {
-        font-family: var(--font-pixel);
-        color: var(--text-blue);
-        font-size: 1.8rem;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-        margin-bottom: 15px;
-        line-height: 1.5;
-    }
-    
-    .status-bar {
-        font-family: var(--font-pixel);
-        font-size: 0.8rem;
-        color: var(--status-text);
-        background-color: var(--status-orange);
-        margin-top: 15px; padding: 12px; border-radius: 5px;
-        line-height: 1.5; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    }
+    header h1 { font-family: var(--font-pixel); color: var(--text-blue); font-size: 1.8rem; text-shadow: 2px 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px; line-height: 1.5; }
+    .status-bar { font-family: var(--font-pixel); font-size: 0.8rem; color: var(--status-text); background-color: var(--status-orange); margin-top: 15px; padding: 12px; border-radius: 5px; line-height: 1.5; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
     .status-SUCCESS { background-color: #4CAF50 !important; }
     .status-FAILURE { background-color: #F44336 !important; }
-    
-    .container {
-        display: flex; flex-wrap: wrap; justify-content: space-around; gap: 20px;
-        background-color: var(--bg-container);
-        padding: 20px; border-radius: 8px; border: 2px solid var(--text-blue);
-    }
-
-    .leaderboard-card {
-        background-color: var(--card-bg);
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-        width: 100%; max-width: 600px; 
-        flex-grow: 1;
-        border: 4px solid var(--text-blue);
-        overflow: hidden;
-    }
-
-    .leaderboard-card h2 {
-        font-family: var(--font-pixel);
-        font-size: 1.1rem;
-        background-color: var(--card-title-bg);
-        padding: 20px; margin: 0; text-align: center;
-        color: var(--text-blue); text-shadow: none;
-    }
-
+    .container { display: flex; flex-wrap: wrap; justify-content: space-around; gap: 20px; background-color: var(--bg-container); padding: 20px; border-radius: 8px; border: 2px solid var(--text-blue); }
+    .leaderboard-card { background-color: var(--card-bg); border-radius: 12px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1); width: 100%; max-width: 600px; flex-grow: 1; border: 4px solid var(--text-blue); overflow: hidden; }
+    .leaderboard-card h2 { font-family: var(--font-pixel); font-size: 1.1rem; background-color: var(--card-title-bg); padding: 20px; margin: 0; text-align: center; color: var(--text-blue); text-shadow: none; }
     .leaderboard-body { padding: 20px; }
-
-    .equipe-item {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 15px 10px; margin-bottom: 10px;
-        border-radius: 8px; background: var(--card-bg);
-        border-left: 7px solid var(--text-blue);
-        border: 2px solid var(--text-blue);
-        animation: fadeIn 0.5s ease forwards; opacity: 0;
-    }
-    
+    .equipe-item { display: flex; align-items: center; justify-content: space-between; padding: 15px 10px; margin-bottom: 10px; border-radius: 8px; background: var(--card-bg); border-left: 7px solid var(--text-blue); border: 2px solid var(--text-blue); animation: fadeIn 0.5s ease forwards; opacity: 0; }
     @keyframes fadeIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
-
-    .equipe-item.rank-1 .rank { color: var(--gold); }
-    .equipe-item.rank-2 .rank { color: var(--silver); }
-    .equipe-item.rank-3 .rank { color: var(--bronze); }
-    
-    .equipe-item .rank {
-        font-family: var(--font-pixel);
-        font-size: 1.3rem; min-width: 45px; text-align: center;
-        color: var(--text-blue);
-    }
-    
+    .equipe-item.rank-1 .rank { color: var(--gold); } .equipe-item.rank-2 .rank { color: var(--silver); } .equipe-item.rank-3 .rank { color: var(--bronze); }
+    .equipe-item .rank { font-family: var(--font-pixel); font-size: 1.3rem; min-width: 45px; text-align: center; color: var(--text-blue); }
     .equipe-info { flex-grow: 1; margin-left: 15px; overflow: hidden; }
-    .equipe-info .nome {
-        font-family: var(--font-pixel);
-        font-size: 1.0rem;
-        font-weight: normal;
-        color: var(--text-blue);
-    }
-
-    .equipe-score {
-        font-family: var(--font-pixel);
-        font-size: 1.2rem;
-        color: var(--highlight-pink);
-        text-align: right; padding-left: 10px;
-    }
-
+    .equipe-info .nome { font-family: var(--font-pixel); font-size: 1.0rem; font-weight: normal; color: var(--text-blue); }
+    .equipe-score { font-family: var(--font-pixel); font-size: 1.2rem; color: var(--highlight-pink); text-align: right; padding-left: 10px; }
     .loading { text-align: center; font-size: 1.2rem; padding: 20px; color: var(--text-blue); font-family: var(--font-pixel); }
-
     #fullscreen-btn-container { position: absolute; top: 15px; right: 20px; z-index: 100; }
-    #fullscreen-btn {
-        background: rgba(0, 0, 204, 0.1); border: 1px solid var(--text-blue);
-        color: var(--text-blue); padding: 8px 12px; border-radius: 5px;
-        cursor: pointer; font-size: 1.1rem; transition: all 0.2s ease;
-    }
+    #fullscreen-btn { background: rgba(0, 0, 204, 0.1); border: 1px solid var(--text-blue); color: var(--text-blue); padding: 8px 12px; border-radius: 5px; cursor: pointer; font-size: 1.1rem; transition: all 0.2s ease; }
     #fullscreen-btn:hover { background: var(--text-blue); color: #FFFFFF; }
-    
-    .colab-leaderboard-container.fake-fullscreen {
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 9999;
-        overflow-y: auto; margin: 0; border-radius: 0;
-    }
+    .colab-leaderboard-container.fake-fullscreen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 9999; overflow-y: auto; margin: 0; border-radius: 0; }
     .colab-leaderboard-container.fake-fullscreen h1 { font-size: 2.5rem; }
 </style>
 """
 
-# --- SEU JS (MANTIDO INTACTO) ---
 JS = """
 <script>
     function construirHtmlEquipe(equipe, index) {
@@ -392,7 +266,6 @@ JS = """
         construir(window.rankingPublica, 'leaderboard-publica');
         construir(window.rankingPrivada, 'leaderboard-privada');
         
-        // Timer
         let time = window.TEMPO_ESPERA;
         const el = document.getElementById('countdown');
         if(el) {
@@ -403,7 +276,6 @@ JS = """
             }, 1000);
         }
         
-        // Fullscreen
         const btn = document.getElementById('fullscreen-btn');
         const container = document.querySelector('.colab-leaderboard-container');
         if(btn && container) {
